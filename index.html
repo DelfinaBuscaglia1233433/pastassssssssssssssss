@@ -797,7 +797,7 @@ function connectToFirebase(uid) {
       isRemote=true;
       D=data; migrateD();
       localStorage.setItem('pastasV5',JSON.stringify(D));
-      renderVentas();
+      renderWhenReady();
       if(document.getElementById('tab-resumen').classList.contains('active')) renderResumen();
       isRemote=false;
     } else if (firstLoad && local) {
@@ -963,6 +963,16 @@ function refreshChips(card,p) {
 }
 
 // ─── RENDER ─────────────────────────────────────────────
+function renderWhenReady() {
+  const el = document.activeElement;
+  if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA') &&
+      (el.closest('.mobile-cards') || el.closest('.table-wrap'))) {
+    el.addEventListener('blur', ()=>renderVentas(), {once:true});
+  } else {
+    renderVentas();
+  }
+}
+
 function renderVentas() {
   updateFilterSelect();
   const vis=getFiltered();
