@@ -564,7 +564,6 @@ let currentUser    = null;
 let fbRef          = null;
 let fbListener     = null;
 let isRemote       = false;
-let skipNextUpdate = false;
 let authMode       = 'login';   // 'login' | 'register'
 
 // ─── HELPERS ───────────────────────────────────────────
@@ -790,8 +789,6 @@ function connectToFirebase(uid) {
   let firstLoad = true;
 
   fbListener = fbRef.on('value', snap=>{
-    // Si el update lo enviamos nosotros, ignorarlo para no perder el foco del input
-    if (skipNextUpdate) { skipNextUpdate=false; setSyncUI('ok','Sincronizado ☁️'); return; }
     const data=snap.val();
     if (data) {
       isRemote=true;
@@ -817,9 +814,9 @@ function connectToFirebase(uid) {
 function saveToCloud() {
   if (!fbRef || isRemote) return;
   setSyncUI('loading','Guardando...');
-  skipNextUpdate = true;
   fbRef.set(D)
-    .catch(()=>{ skipNextUpdate=false; setSyncUI('error','Error al guardar'); });
+    .then(()=>setSyncUI('ok','Sincronizado ☁️'))
+    .catch(()=>setSyncUI('error','Error al guardar'));
 }
 
 let saveTimer;
