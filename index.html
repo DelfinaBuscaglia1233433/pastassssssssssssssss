@@ -121,6 +121,13 @@ body { font-family: -apple-system, 'Segoe UI', Tahoma, sans-serif; background: #
 .filter-select:focus { outline:none; border-color:var(--green-lt); }
 .filter-badge { background:var(--green-bg); color:var(--green); border-radius:12px; padding:3px 10px; font-size:.72rem; font-weight:700; }
 
+/* ─ Planilla bar ─ */
+.planilla-bar { display:flex; align-items:center; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+.planilla-tabs { display:flex; gap:6px; flex-wrap:wrap; flex:1; }
+.planilla-tab { padding:6px 14px; border-radius:20px; font-size:.78rem; font-weight:600; border:2px solid #a5d6a7; background:#fff; color:var(--green); cursor:pointer; white-space:nowrap; }
+.planilla-tab.active { background:var(--green-lt); color:#fff; border-color:var(--green-lt); }
+.planilla-tab:hover:not(.active) { background:var(--green-bg); }
+
 /* ─ Desktop table ─ */
 .table-section { display:block; }
 .table-wrap { overflow-x:auto; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,.1); -webkit-overflow-scrolling:touch; }
@@ -128,6 +135,10 @@ table { border-collapse:collapse; background:#fff; min-width:100%; }
 thead th { background:#388e3c; color:#fff; padding:8px 5px; font-size:.7rem; font-weight:700; text-align:center; white-space:nowrap; }
 thead th.col-repartir { background:var(--blue); }
 thead th.col-pago { background:#558b2f; }
+@media (min-width:641px) {
+  .table-wrap { max-height: calc(100vh - 280px); overflow-y: auto; }
+  thead th { position: sticky; top: 0; z-index: 5; }
+}
 tbody td { padding:5px 4px; border-bottom:1px solid var(--green-bg); text-align:center; white-space:nowrap; }
 tbody tr:hover td { background:#f9fff9; }
 tbody tr.pagado-row td { background:#f1f8e9; }
@@ -301,6 +312,10 @@ input[type=checkbox].chk { width:18px; height:18px; cursor:pointer; accent-color
 
   <!-- ════ VENTAS ════ -->
   <div class="tab-panel active" id="tab-ventas">
+    <div class="planilla-bar">
+      <div class="planilla-tabs" id="planillaTabs"></div>
+      <button class="btn btn-outline" onclick="nuevaPlanilla()" style="flex-shrink:0">+ Nueva planilla</button>
+    </div>
     <div class="toolbar">
       <button class="btn btn-green" onclick="addPedido()">+ Agregar pedido</button>
       <button class="btn btn-teal"  onclick="openPrintModal()">🖨️ Imprimir</button>
@@ -560,10 +575,15 @@ const DEFAULT_STOCK = {alfajores:0,verdes:60,violetas:50,integrales:20,sorrentin
 let D = {pedidos:[],precios:structuredClone(DEFAULT_PRECIOS),stock:{...DEFAULT_STOCK},nextId:1};
 let filterRepartir = '';
 let currentUser    = null;
-let fbRef          = null;
-let fbListener     = null;
-let isRemote       = false;
-let authMode       = 'login';   // 'login' | 'register'
+let fbRef                    = null;
+let fbListener               = null;
+let fbIndexRef               = null;
+let fbIndexListener          = null;
+let isRemote                 = false;
+let authMode                 = 'login';
+let currentUid               = null;
+let planillasIndex           = [];
+let currentPlanillaId        = 'datos';
 
 // ─── HELPERS ───────────────────────────────────────────
 function fmt(n)  { return '$'+Math.round(n).toLocaleString('es-AR'); }
@@ -767,23 +787,61 @@ function doLogout() {
   if (!confirm('¿Cerrar sesión?')) return;
   stopInactivityWatch();
   if (fbListener && fbRef) { fbRef.off('value',fbListener); fbListener=null; fbRef=null; }
+  if (fbIndexListener && fbIndexRef) { fbIndexRef.off('value',fbIndexListener); fbIndexListener=null; fbIndexRef=null; }
   firebase.auth().signOut();
 }
 
 // ─── FIREBASE DATA ──────────────────────────────────────
+function parsePlanillasIndex(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val.filter(Boolean);
+  return Object.values(val).filter(v=>v&&v.id);
+}
+
 function connectToFirebase(uid) {
-  if (fbListener && fbRef) { fbRef.off('value',fbListener); }
-  const db   = firebase.database();
-  // Registrar y mostrar último acceso
+  currentUid = uid;
+  if (fbListener && fbRef) { fbRef.off('value',fbListener); fbListener=null; }
+  if (fbIndexListener && fbIndexRef) { fbIndexRef.off('value',fbIndexListener); fbIndexListener=null; }
+
+  const db = firebase.database();
   const prev = localStorage.getItem('lastLogin');
   const now  = new Date().toLocaleString('es-AR');
   db.ref(`usuarios/${uid}/lastLogin`).set(now);
   localStorage.setItem('lastLogin', now);
   if (prev) { const el=document.getElementById('lastLoginLabel'); if(el) el.textContent='Último acceso: '+prev; }
-  fbRef = db.ref(`usuarios/${uid}/datos`);
+
+  setSyncUI('loading','Cargando...');
+  fbIndexRef = db.ref(`usuarios/${uid}/planillasIndex`);
+
+  // Cargar índice una vez para inicializar
+  fbIndexRef.once('value', snap=>{
+    let idx = parsePlanillasIndex(snap.val());
+    if (!idx.length) {
+      idx = [{id:'datos', nombre:'Planilla 1', fecha: new Date().toLocaleDateString('es-AR')}];
+      fbIndexRef.set(idx);
+    }
+    planillasIndex = idx;
+    currentPlanillaId = idx[0].id;
+    renderPlanillaTabs();
+    loadPlanilla(currentPlanillaId);
+  });
+
+  // Escuchar cambios en el índice (desde otro dispositivo)
+  fbIndexListener = fbIndexRef.on('value', snap=>{
+    const idx = parsePlanillasIndex(snap.val());
+    if (idx.length) { planillasIndex=idx; renderPlanillaTabs(); }
+  });
+}
+
+function loadPlanilla(planillaId) {
+  if (fbListener && fbRef) { fbRef.off('value',fbListener); fbListener=null; }
+  currentPlanillaId = planillaId;
+  renderPlanillaTabs();
+
+  const db = firebase.database();
+  fbRef = db.ref(`usuarios/${currentUid}/${planillaId}`);
   setSyncUI('loading','Cargando datos...');
 
-  // Intentar migrar datos locales previos
   const local = localStorage.getItem('pastasV5');
   let firstLoad = true;
 
@@ -796,18 +854,41 @@ function connectToFirebase(uid) {
       renderWhenReady();
       if(document.getElementById('tab-resumen').classList.contains('active')) renderResumen();
       isRemote=false;
-    } else if (firstLoad && local) {
-      // Primera conexión: subir datos locales
+    } else if (firstLoad && local && planillaId==='datos') {
       try { const ld=JSON.parse(local); fbRef.set(ld); }
       catch(e) { fbRef.set(D); }
     } else if (firstLoad) {
+      D={pedidos:[],precios:structuredClone(DEFAULT_PRECIOS),stock:{...DEFAULT_STOCK},nextId:1};
       fbRef.set(D);
     }
     firstLoad=false;
     setSyncUI('ok','Sincronizado ☁️');
-  }, err=>{
-    setSyncUI('error','Error de conexión');
-  });
+  }, err=>{ setSyncUI('error','Error de conexión'); });
+}
+
+function renderPlanillaTabs() {
+  const c=document.getElementById('planillaTabs'); if(!c) return;
+  c.innerHTML=planillasIndex.map(p=>
+    `<button class="planilla-tab${p.id===currentPlanillaId?' active':''}" onclick="switchPlanilla('${p.id}')" title="${p.fecha||''}">${esc(p.nombre)}</button>`
+  ).join('');
+}
+
+function switchPlanilla(id) {
+  if (id===currentPlanillaId) return;
+  D={pedidos:[],precios:structuredClone(DEFAULT_PRECIOS),stock:{...DEFAULT_STOCK},nextId:1};
+  filterRepartir='';
+  document.getElementById('filterSelect').value='';
+  loadPlanilla(id);
+}
+
+function nuevaPlanilla() {
+  const nombre=prompt('Nombre de la nueva planilla (ej: "Vuelta 2", "Julio 2026"):');
+  if (!nombre||!nombre.trim()) return;
+  const id='planilla_'+Date.now();
+  const fecha=new Date().toLocaleDateString('es-AR');
+  planillasIndex.push({id, nombre:nombre.trim(), fecha});
+  firebase.database().ref(`usuarios/${currentUid}/planillasIndex`).set(planillasIndex);
+  switchPlanilla(id);
 }
 
 function saveToCloud() {
