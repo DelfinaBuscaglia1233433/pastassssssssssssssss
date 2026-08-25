@@ -314,6 +314,7 @@ input[type=checkbox].chk { width:18px; height:18px; cursor:pointer; accent-color
   <div class="tab-panel active" id="tab-ventas">
     <div class="planilla-bar">
       <div class="planilla-tabs" id="planillaTabs"></div>
+      <button class="btn btn-outline" onclick="renombrarPlanilla()" style="flex-shrink:0">✏️ Editar nombre</button>
       <button class="btn btn-outline" onclick="nuevaPlanilla()" style="flex-shrink:0">+ Nueva planilla</button>
     </div>
     <div class="toolbar">
@@ -343,6 +344,8 @@ input[type=checkbox].chk { width:18px; height:18px; cursor:pointer; accent-color
               <th>Combo 3<br><small style="font-weight:400">(Int.)</small></th>
               <th>Sorrentinos</th>
               <th>Combo 4<br><small style="font-weight:400">(Sort.)</small></th>
+              <th>Naranjas</th>
+              <th>Combo 5<br><small style="font-weight:400">(Nar.)</small></th>
               <th>Total $</th>
               <th class="col-pago">Pedido<br>Pago ✓</th>
               <th class="col-repartir">Repartir 🔵</th>
@@ -357,6 +360,8 @@ input[type=checkbox].chk { width:18px; height:18px; cursor:pointer; accent-color
               <td id="ft-verdes">-</td><td id="ft-combo1">-</td>
               <td id="ft-integrales">-</td><td id="ft-combo3">-</td>
               <td id="ft-sorrentinos">-</td><td id="ft-combo4">-</td>
+              <td id="ft-naranjas">-</td>
+              <td id="ft-combo5">-</td>
               <td id="ft-total" style="color:var(--green)">$0</td>
               <td id="ft-pagados">0/0</td><td>-</td>
               <td id="ft-efectivo">$0</td><td id="ft-transf">$0</td><td></td>
@@ -547,18 +552,21 @@ const PRODUCTS = [
   { key:'combo3',      label:'Combo 3 (Int.)'   },
   { key:'sorrentinos', label:'Sorrentinos'      },
   { key:'combo4',      label:'Combo 4 (Sort.)'  },
+  { key:'naranjas',    label:'Naranjas'         },
+  { key:'combo5',      label:'Combo 5 (Nar.)'   },
 ];
-const STOCK_PRODUCTS = ['alfajores','verdes','violetas','integrales','sorrentinos'];
-const STOCK_LABELS   = { alfajores:'Alfajores', verdes:'Verdes', violetas:'Violetas', integrales:'Integrales', sorrentinos:'Sorrentinos' };
+const STOCK_PRODUCTS = ['alfajores','verdes','violetas','integrales','sorrentinos','naranjas'];
+const STOCK_LABELS   = { alfajores:'Alfajores', verdes:'Verdes', violetas:'Violetas', integrales:'Integrales', sorrentinos:'Sorrentinos', naranjas:'Naranjas' };
 
 function calcConsumo(qt) {
-  const all=(qt.combo1||0)+(qt.combo2||0)+(qt.combo3||0)+(qt.combo4||0);
+  const all=(qt.combo1||0)+(qt.combo2||0)+(qt.combo3||0)+(qt.combo4||0)+(qt.combo5||0);
   return {
     alfajores:   (qt.alfajores||0)   + all,
     verdes:      (qt.verdes||0)      + (qt.combo1||0),
     violetas:    (qt.violetas||0)    + (qt.combo2||0),
     integrales:  (qt.integrales||0)  + (qt.combo3||0),
     sorrentinos: (qt.sorrentinos||0) + (qt.combo4||0),
+    naranjas:    (qt.naranjas||0)    + (qt.combo5||0),
   };
 }
 
@@ -567,9 +575,10 @@ const DEFAULT_PRECIOS = {
   combo2:      {venta:20500,costo:15025}, verdes:      {venta:11000,costo:7700},
   combo1:      {venta:17000,costo:11700}, integrales:  {venta:9800, costo:6860},
   combo3:      {venta:16000,costo:10860}, sorrentinos: {venta:12000,costo:8400},
-  combo4:      {venta:18000,costo:12400},
+  combo4:      {venta:18000,costo:12400}, naranjas:    {venta:12000,costo:8400},
+  combo5:      {venta:18000,costo:12400},
 };
-const DEFAULT_STOCK = {alfajores:0,verdes:60,violetas:50,integrales:20,sorrentinos:50};
+const DEFAULT_STOCK = {alfajores:0,verdes:60,violetas:50,integrales:20,sorrentinos:50,naranjas:0};
 
 // ─── ESTADO ────────────────────────────────────────────
 let D = {pedidos:[],precios:structuredClone(DEFAULT_PRECIOS),stock:{...DEFAULT_STOCK},nextId:1};
@@ -584,6 +593,7 @@ let authMode                 = 'login';
 let currentUid               = null;
 let planillasIndex           = [];
 let currentPlanillaId        = 'datos';
+let localEcho                = false;   // true = el próximo snapshot es eco de nuestra propia escritura
 
 // ─── HELPERS ───────────────────────────────────────────
 function fmt(n)  { return '$'+Math.round(n).toLocaleString('es-AR'); }
@@ -597,6 +607,7 @@ function migrateD() {
   if (!D.stock)    D.stock    = {...DEFAULT_STOCK};
   if (!D.nextId)   D.nextId   = D.pedidos.length+1;
   for (const k in DEFAULT_PRECIOS) if (!D.precios[k]) D.precios[k]={...DEFAULT_PRECIOS[k]};
+  STOCK_PRODUCTS.forEach(k=>{ if (D.stock[k]===undefined) D.stock[k]=DEFAULT_STOCK[k]||0; });
   D.pedidos.forEach(p=>{
     if (!p.pedidos)       p.pedidos       = {};
     if (!p.repartir)      p.repartir      = '';
@@ -836,6 +847,7 @@ function connectToFirebase(uid) {
 function loadPlanilla(planillaId) {
   if (fbListener && fbRef) { fbRef.off('value',fbListener); fbListener=null; }
   currentPlanillaId = planillaId;
+  localEcho = false;
   renderPlanillaTabs();
 
   const db = firebase.database();
@@ -847,6 +859,14 @@ function loadPlanilla(planillaId) {
 
   fbListener = fbRef.on('value', snap=>{
     const data=snap.val();
+    // Si es el eco de nuestra propia escritura, el DOM y el almacenamiento
+    // ya están actualizados: NO re-renderizamos (así no se cierra el pedido
+    // que se está editando en el celular).
+    if (localEcho && !firstLoad) {
+      localEcho = false;
+      setSyncUI('ok','Sincronizado ☁️');
+      return;
+    }
     if (data) {
       isRemote=true;
       D=data; migrateD();
@@ -891,12 +911,25 @@ function nuevaPlanilla() {
   switchPlanilla(id);
 }
 
+function renombrarPlanilla() {
+  const actual = planillasIndex.find(p=>p.id===currentPlanillaId);
+  if (!actual) { alert('No hay planilla seleccionada.'); return; }
+  const nombre = prompt('Nuevo nombre de la planilla:', actual.nombre||'');
+  if (nombre===null) return;              // canceló
+  const limpio = nombre.trim();
+  if (!limpio) return;
+  planillasIndex = planillasIndex.map(p=> p.id===currentPlanillaId ? {...p, nombre:limpio} : p);
+  firebase.database().ref(`usuarios/${currentUid}/planillasIndex`).set(planillasIndex);
+  renderPlanillaTabs();
+}
+
 function saveToCloud() {
   if (!fbRef || isRemote) return;
   setSyncUI('loading','Guardando...');
+  localEcho = true;   // el snapshot que vuelve es nuestro; no re-renderizar
   fbRef.set(D)
     .then(()=>setSyncUI('ok','Sincronizado ☁️'))
-    .catch(()=>setSyncUI('error','Error al guardar'));
+    .catch(()=>{ localEcho=false; setSyncUI('error','Error al guardar'); });
 }
 
 let saveTimer;
@@ -1079,8 +1112,14 @@ function renderVentas() {
 
 function renderMobileCards(vis) {
   const c=document.getElementById('mobileCards');
+  // Recordar qué tarjetas estaban abiertas para reabrirlas tras el render
+  const abiertas=[...c.querySelectorAll('.ped-edit-section.open')].map(s=>s.id);
   if(D.pedidos.length===0){c.innerHTML='<div class="empty-state"><p>No hay pedidos</p><small>Tocá "+ Agregar pedido"</small></div>';return;}
   c.innerHTML=vis.map(p=>buildCard(p)).join('');
+  abiertas.forEach(id=>{
+    const s=document.getElementById(id);
+    if(s){ s.classList.add('open'); const b=s.previousElementSibling; if(b&&b.classList.contains('expand-btn')) b.textContent='▲ Cerrar'; }
+  });
 }
 
 function buildCard(p) {
@@ -1164,7 +1203,7 @@ function renderResumen() {
   ].join('');
 
   const consumo=calcConsumo(qt);
-  const comboPor={alfajores:(qt.combo1||0)+(qt.combo2||0)+(qt.combo3||0)+(qt.combo4||0),verdes:qt.combo1||0,violetas:qt.combo2||0,integrales:qt.combo3||0,sorrentinos:qt.combo4||0};
+  const comboPor={alfajores:(qt.combo1||0)+(qt.combo2||0)+(qt.combo3||0)+(qt.combo4||0)+(qt.combo5||0),verdes:qt.combo1||0,violetas:qt.combo2||0,integrales:qt.combo3||0,sorrentinos:qt.combo4||0,naranjas:qt.combo5||0};
   document.getElementById('stockTbody').innerHTML=STOCK_PRODUCTS.map(k=>{
     const s=qt[k]||0,ec=comboPor[k]||0,tot=consumo[k]||0,dan=D.stock[k]||0,d=dan-tot;
     return`<tr><td><strong>${STOCK_LABELS[k]}</strong></td><td>${s}</td><td>${ec||'-'}</td><td><strong>${tot}</strong></td><td>${dan}</td><td class="${d<0?'s-debt':d===0?'':'s-ok'}">${d>=0?d:'⚠ Faltan '+Math.abs(d)}</td></tr>`;
